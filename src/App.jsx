@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import './App.css'
 
-const PROXY = '/api/yahoo/v8/finance/chart/TSLA'
+const SYMBOL = 'TSLA'
+const YAHOO_BASE = `https://query1.finance.yahoo.com/v8/finance/chart/${SYMBOL}`
+const LOCAL_PROXY = `/api/yahoo/v8/finance/chart/${SYMBOL}`
 
 const RANGES = [
   { label: '1D', range: '1d', interval: '5m' },
@@ -220,7 +222,21 @@ export default function App() {
   const fetchData = useCallback(async (r, i) => {
     setLoading(true)
     try {
-      const res = await fetch(`${PROXY}?range=${r}&interval=${i}`)
+      const params = `range=${r}&interval=${i}`
+      const yahooUrl = `${YAHOO_BASE}?${params}`
+      const corsUrl = `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`
+      let res
+      try {
+        res = await fetch(yahooUrl)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      } catch {
+        try {
+          res = await fetch(corsUrl)
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        } catch {
+          res = await fetch(`${LOCAL_PROXY}?${params}`)
+        }
+      }
       const json = await res.json()
       setData(json.chart.result[0])
     } catch (e) {
