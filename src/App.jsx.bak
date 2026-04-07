@@ -1,0 +1,295 @@
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { motion } from 'framer-motion'
+import { createChart, ColorType } from 'lightweight-charts'
+import './App.css'
+
+const PROXY = '/api/yahoo/v8/finance/chart/MSFT'
+
+const RANGES = [
+  { label: '1D', range: '1d', interval: '5m' },
+  { label: '5D', range: '5d', interval: '15m' },
+  { label: '1M', range: '1mo', interval: '1d' },
+  { label: '3M', range: '3mo', interval: '1d' },
+  { label: '6M', range: '6mo', interval: '1wk' },
+  { label: '1Y', range: '1y', interval: '1wk' },
+  { label: '5Y', range: '5y', interval: '1mo' },
+]
+
+function formatNum(n) {
+  if (!n && n !== 0) return '—'
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function formatBigNum(n) {
+  if (!n) return '—'
+  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`
+  return `$${formatNum(n)}`
+}
+
+export default function App() {
+  const [data, setData] = useState(null)
+  const [range, setRange] = useState('1mo')
+  const [interval, setInterval_] = useState('1d')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const chartRef = useRef(null)
+  const chartInstance = useRef(null)
+
+  const fetchData = useCallback(async (r, i) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`${PROXY}?range=${r}&interval=${i}`)
+      const json = await res.json()
+      const result = json.chart.result[0]
+      setData(result)
+    } catch (e) {
+      setError('Failed to fetch data')
+    }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    fetchData(range, interval)
+    const id = window.setInterval(() => fetchData(range, interval), 60000)
+    return () => window.clearInterval(id)
+  }, [range, interval, fetchData])
+
+  useEffect(() => {
+    if (!data || !chartRef.current) return
+
+    if (chartInstance.current) {
+      chartInstance.current.remove()
+    }
+
+    const ts = data.timestamp || []
+    const closes = data.indicators?.quote?.[0]?.close || []
+    const opens = data.indicators?.quote?.[0]?.open || []
+    const highs = data.indicators?.quote?.[0]?.high || []
+    const lows = data.indicators?.quote?.[0]?.low || []
+
+    const firstClose = closes.find(c => c != null) || 0
+    const lastClose = closes.filter(c => c != null).pop() || 0
+    const isUp = lastClose >= firstClose
+
+    const chart = createChart(chartRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: 'transparent' },
+        textColor: 'rgba(240, 253, 244, 0.5)',
+        fontFamily: 'Space Grotesk',
+        fontSize: 12,
+      },
+      grid: {
+        vertLines: { color: 'rgba(34, 197, 94, 0.05)' },
+        horzLines: { color: 'rgba(34, 197, 94, 0.05)' },
+      },
+      width: chartRef.current.clientWidth,
+      height: 400,
+      crosshair: {
+        vertLine: { color: 'rgba(34, 197, 94, 0.3)', labelBackgroundColor: '#166534' },
+        horzLine: { color: 'rgba(34, 197, 94, 0.3)', labelBackgroundColor: '#166534' },
+      },
+      rightPriceScale: {
+        borderColor: 'rgba(34, 197, 94, 0.1)',
+      },
+      timeScale: {
+        borderColor: 'rgba(34, 197, 94, 0.1)',
+        timeVisible: range === '1d' || range === '5d',
+      },
+    })
+
+    const candleData = ts.map((t, idx) => ({
+      time: t,
+      open: opens[idx] || 0,
+      high: highs[idx] || 0,
+      low: lows[idx] || 0,
+      close: closes[idx] || 0,
+    })).filter(d => d.open && d.close)
+
+    if (range === '1d' || range === '5d') {
+      // Area chart for short ranges
+      const areaData = ts.map((t, idx) => ({
+        time: t,
+        value: closes[idx],
+      })).filter(d => d.value != null)
+
+      const series = chart.addAreaSeries({
+        topColor: isUp ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)',
+        bottomColor: isUp ? 'rgba(34, 197, 94, 0.02)' : 'rgba(239, 68, 68, 0.02)',
+        lineColor: isUp ? '#22c55e' : '#ef4444',
+        lineWidth: 2,
+      })
+      series.setData(areaData)
+    } else {
+      const series = chart.addCandlestickSeries({
+        upColor: '#22c55e',
+        downColor: '#ef4444',
+        borderDownColor: '#ef4444',
+        borderUpColor: '#22c55e',
+        wickDownColor: 'rgba(239, 68, 68, 0.5)',
+        wickUpColor: 'rgba(34, 197, 94, 0.5)',
+      })
+      series.setData(candleData)
+    }
+
+    chart.timeScale().fitContent()
+    chartInstance.current = chart
+
+    const handleResize = () => {
+      if (chartRef.current) {
+        chart.applyOptions({ width: chartRef.current.clientWidth })
+      }
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [data, range])
+
+  const meta = data?.meta || {}
+  const closes = data?.indicators?.quote?.[0]?.close || []
+  const price = meta.regularMarketPrice || 0
+  const prevClose = closes.find(c => c != null) || price
+  const change = price - prevClose
+  const changePct = prevClose ? ((change / prevClose) * 100) : 0
+  const isUp = change >= 0
+
+  return (
+    <div style={{ position: 'relative', zIndex: 1, maxWidth: 1200, margin: '0 auto', padding: '40px 24px' }}>
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6 }}
+        style={{ marginBottom: 40 }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 12,
+            background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 20, fontWeight: 800, color: '#0a1a0f',
+            boxShadow: '0 0 30px rgba(34, 197, 94, 0.3)',
+          }}>
+            M
+          </div>
+          <div>
+            <h1 style={{
+              fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-grotesk)',
+              letterSpacing: '-0.02em', lineHeight: 1,
+            }}>
+              Microsoft <span style={{ color: 'var(--text-3)', fontWeight: 500 }}>MSFT</span>
+            </h1>
+            <p style={{ fontSize: 13, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+              NASDAQ · Real-time data
+            </p>
+          </div>
+        </div>
+
+        {/* Price */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 20 }}>
+          <span style={{
+            fontSize: 56, fontWeight: 800, fontFamily: 'var(--font-grotesk)',
+            letterSpacing: '-0.03em', lineHeight: 1,
+          }}>
+            ${formatNum(price)}
+          </span>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 14px', borderRadius: 999,
+            background: isUp ? 'rgba(34, 197, 94, 0.12)' : 'var(--red-dim)',
+            color: isUp ? 'var(--green-light)' : 'var(--red)',
+            fontFamily: 'var(--font-mono)', fontSize: 15, fontWeight: 600,
+          }}>
+            {isUp ? '▲' : '▼'} ${formatNum(Math.abs(change))} ({changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%)
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Chart Card */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6, delay: 0.1 }}
+        className="glass"
+        style={{ padding: 24, marginBottom: 24 }}
+      >
+        {/* Range selector */}
+        <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
+          {RANGES.map(r => (
+            <button
+              key={r.range}
+              onClick={() => { setRange(r.range); setInterval_(r.interval) }}
+              style={{
+                padding: '8px 16px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600,
+                background: range === r.range ? 'var(--green-primary)' : 'var(--green-muted)',
+                color: range === r.range ? '#0a1a0f' : 'var(--text-2)',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Chart */}
+        <div ref={chartRef} style={{ width: '100%', minHeight: 400, position: 'relative' }}>
+          {loading && (
+            <div style={{
+              position: 'absolute', inset: 0, display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(10, 26, 15, 0.8)', borderRadius: 12, zIndex: 2,
+            }}>
+              <div style={{ color: 'var(--green-primary)', fontFamily: 'var(--font-mono)', fontSize: 14 }}>
+                Loading chart...
+              </div>
+            </div>
+          )}
+        </div>
+      </motion.div>
+
+      {/* Stats Grid */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6, delay: 0.2 }}
+        style={{
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: 16, marginBottom: 24,
+        }}
+      >
+        {[
+          { label: 'Market Cap', value: formatBigNum(meta.marketCap || (price * 7.43e9)) },
+          { label: 'Day Range', value: `$${formatNum(meta.regularMarketDayLow)} — $${formatNum(meta.regularMarketDayHigh)}` },
+          { label: '52W Range', value: `$${formatNum(meta.fiftyTwoWeekLow)} — $${formatNum(meta.fiftyTwoWeekHigh)}` },
+          { label: 'Volume', value: (meta.regularMarketVolume || 0).toLocaleString() },
+          { label: 'Avg Volume', value: (meta.averageDailyVolume10Day || 0).toLocaleString() },
+          { label: 'Currency', value: meta.currency || 'USD' },
+        ].map((stat, i) => (
+          <div key={i} className="glass" style={{ padding: 20 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {stat.label}
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--font-grotesk)' }}>
+              {stat.value}
+            </div>
+          </div>
+        ))}
+      </motion.div>
+
+      {/* Footer */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.6, delay: 0.4 }}
+        style={{
+          textAlign: 'center', padding: '30px 0',
+          fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)',
+        }}
+      >
+        Data from Yahoo Finance · Updates every 60s · Built by Sanjay 🥔
+      </motion.div>
+    </div>
+  )
+}
