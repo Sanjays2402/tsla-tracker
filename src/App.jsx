@@ -279,7 +279,7 @@ export default function App() {
         style={{ marginBottom: 32 }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
-          {/* Glassy Microsoft logo */}
+          {/* Glassy Tesla logo */}
           <div style={{
             width: 56, height: 56, borderRadius: 16,
             background: 'rgba(255,255,255,0.06)',

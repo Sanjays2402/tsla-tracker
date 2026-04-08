@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
-    port: 5174,
+    port: 5178,
     proxy: {
       '/api/yahoo': {
         target: 'https://query1.finance.yahoo.com',
